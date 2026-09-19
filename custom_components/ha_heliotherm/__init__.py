@@ -94,6 +94,7 @@ class HaHeliothermModbusHub:
         self._scan_interval = timedelta(seconds=scan_interval)
         self._unsub_interval_method = None
         self._sensors = []
+        self._updating = False
         self.data = {}
 
     @callback
@@ -124,7 +125,22 @@ class HaHeliothermModbusHub:
         if not self._sensors:
             return
 
-        update_result = self.read_modbus_registers()
+        if self._updating:
+            # The previous poll is still waiting on the heat pump. Skipping keeps
+            # unanswered requests from piling up in the executor thread pool.
+            _LOGGER.debug("Previous Modbus read still running, skipping this cycle")
+            return
+
+        self._updating = True
+        try:
+            update_result = await self._hass.async_add_executor_job(
+                self.read_modbus_registers
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Modbus read from %s failed: %s", self._name, err)
+            return
+        finally:
+            self._updating = False
 
         if update_result:
             for update_callback in self._sensors:
